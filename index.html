@@ -39,6 +39,14 @@
         border-radius: 4px;
       }
 
+      .disclaimer {
+        font-size: 12px;
+        color: #777;
+        margin-left: 8px;
+        font-weight: 400;
+        vertical-align: middle;
+      }
+
       .controls {
         margin-top: 10px;
         display: flex;
@@ -116,7 +124,10 @@
   <body>
     <!-- LEFT: RAW INPUT -->
     <div class="column">
-      <h2>Raw document</h2>
+      <h2>
+        Raw document
+        <span class="disclaimer">Your data stays completely offline.</span>
+      </h2>
       <textarea
         id="input"
         placeholder="Paste the portal export here..."
@@ -140,217 +151,6 @@
       </div>
     </div>
 
-    <script>
-      (function () {
-        const inputEl = document.getElementById("input");
-        const parseBtn = document.getElementById("parseBtn");
-        const downloadBtn = document.getElementById("downloadBtn");
-        const previewContainer = document.getElementById("previewContainer");
-        const summaryEl = document.getElementById("summary");
-
-        let lastRows = [];
-
-        // Known section headers we treat as "link type"
-        const KNOWN_HEADERS = [
-          "Gemeente",
-          "Verklaring van vertrek of inschrijving",
-          "Land vanwaar de vreemdeling afkomstig is",
-          "Naam en voornamen",
-          "Naamwijziging",
-          "Adres",
-          "Nationaliteit",
-          "Beroep",
-          "Geboorteplaats",
-          "Afstamming",
-          "Afstamming in dalende lijn",
-          "Burgerlijke staat",
-          "Samenstelling van het gezin",
-          "Bestaan van het identiteits- en handtekenings-certificaat",
-          "Identiteitsbewijs",
-          "Nummer van de Dienst Vreemdelingenzaken",
-          "Bijzondere informatie (vreemdelingen)",
-          "Vermelding van het register",
-        ];
-
-        const DATE_LINE_REGEX = /^(\d{2}\.\d{2}\.\d{4})\s+(.*)$/; // dd.mm.yyyy rest
-
-        function extractPersonName(text) {
-          // Try PEOPLE block first
-          const lastNameMatch = text.match(/PEO_LastName="([^"]+)"/);
-          const firstNameMatch = text.match(/PEO_FirstName="([^"]+)"/);
-
-          if (lastNameMatch || firstNameMatch) {
-            const lastName = lastNameMatch ? lastNameMatch[1].trim() : "";
-            const firstName = firstNameMatch ? firstNameMatch[1].trim() : "";
-            const parts = [];
-            if (lastName) parts.push(lastName);
-            if (firstName) parts.push(firstName);
-            if (parts.length) return parts.join(", ");
-          }
-
-          // Fallback: try "Naam en voornamen" section
-          const nameSectionIndex = text.indexOf("Naam en voornamen");
-          if (nameSectionIndex !== -1) {
-            const tail = text.slice(nameSectionIndex).split(/\r?\n/).slice(1); // lines after header
-            for (const line of tail) {
-              const trimmed = line.trim();
-              if (!trimmed) continue;
-              const m = trimmed.match(DATE_LINE_REGEX);
-              if (m) {
-                // e.g. "00.00.1950 El Abdullah,Anouar"
-                return m[2].trim();
-              }
-            }
-          }
-
-          return "UNKNOWN_PERSON";
-        }
-
-        function parseRelations(text) {
-          const person = extractPersonName(text);
-          const lines = text
-            .split(/\r?\n/)
-            .map((l) => l.trim())
-            .filter((l) => l.length > 0);
-
-          let currentHeader = null;
-          const rows = [];
-
-          for (const line of lines) {
-            // Header detection: exact match against known headers
-            if (KNOWN_HEADERS.includes(line)) {
-              currentHeader = line;
-              continue;
-            }
-
-            const dateMatch = line.match(DATE_LINE_REGEX);
-            if (dateMatch && currentHeader) {
-              const date = dateMatch[1];
-              const rest = dateMatch[2].trim();
-              if (!rest) continue;
-
-              // entity = date + rest, or only rest?
-              // If you want to keep the date inside the entity, comment the next line
-              const entity = rest;
-
-              rows.push({
-                person,
-                linkType: currentHeader,
-                entity,
-                date,
-              });
-            }
-          }
-
-          return rows;
-        }
-
-        function renderPreview(rows) {
-          if (!rows.length) {
-            previewContainer.innerHTML =
-              "<i>No relations found. Check the input and parse again.</i>";
-            summaryEl.textContent = "";
-            downloadBtn.disabled = true;
-            return;
-          }
-
-          let html =
-            "<table><thead><tr>" +
-            "<th>#</th>" +
-            "<th>Person</th>" +
-            "<th>Link type (section)</th>" +
-            "<th>Entity</th>" +
-            "<th>Date</th>" +
-            "</tr></thead><tbody>";
-
-          rows.forEach((row, idx) => {
-            html += "<tr>";
-            html += `<td>${idx + 1}</td>`;
-            html += `<td>${escapeHtml(row.person)}</td>`;
-            html += `<td>${escapeHtml(row.linkType)}</td>`;
-            html += `<td>${escapeHtml(row.entity)}</td>`;
-            html += `<td>${escapeHtml(row.date)}</td>`;
-            html += "</tr>";
-          });
-
-          html += "</tbody></table>";
-          previewContainer.innerHTML = html;
-
-          summaryEl.textContent = `${rows.length} relation(s) parsed for "${rows[0].person}"`;
-          downloadBtn.disabled = false;
-        }
-
-        function escapeHtml(str) {
-          return String(str)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
-        }
-
-        function toCSV(rows) {
-          const header = ["person", "link_type", "entity", "date"];
-          const lines = [header];
-
-          rows.forEach((r) => {
-            lines.push([r.person, r.linkType, r.entity, r.date]);
-          });
-
-          return lines
-            .map((cols) =>
-              cols
-                .map((cell) => {
-                  const s = String(cell ?? "");
-                  if (/[",\n]/.test(s)) {
-                    return '"' + s.replace(/"/g, '""') + '"';
-                  }
-                  return s;
-                })
-                .join(",")
-            )
-            .join("\n");
-        }
-
-        function downloadCSV(csv, filename = "relations.csv") {
-          const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = filename;
-          a.style.display = "none";
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        }
-
-        // Wire up buttons
-        parseBtn.addEventListener("click", () => {
-          const text = inputEl.value || "";
-          if (!text.trim()) {
-            alert("Paste the document text first.");
-            return;
-          }
-          lastRows = parseRelations(text);
-          renderPreview(lastRows);
-        });
-
-        downloadBtn.addEventListener("click", () => {
-          if (!lastRows.length) return;
-          const csv = toCSV(lastRows);
-          downloadCSV(csv);
-        });
-
-        // Optional: auto-parse on paste
-        inputEl.addEventListener("paste", () => {
-          // small delay so pasted content is in textarea
-          setTimeout(() => {
-            const text = inputEl.value || "";
-            lastRows = parseRelations(text);
-            renderPreview(lastRows);
-          }, 0);
-        });
-      })();
-    </script>
+    <script src="app.js"></script>
   </body>
 </html>
